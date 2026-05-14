@@ -19,8 +19,8 @@ By leveraging expert actions, we established specific goals for each train‐ in
 <img width="297" alt="image" src="https://github.com/jeannineshiu/Multi-Actor-Critic/assets/43820595/dcb59a8d-5900-43c4-b0c5-5e4ad10944bb">
 
 
-## Experimental result
-In this final project, we utilize the FIMTX future(小 台 指 期 貨) dataset as the foundation for our analysis and training process. Details of the training and testing periods are specified in Table 1. Figure 1 exhibits the outcomes achieved on the testing set, providing a visual representation of the performance during the evaluation phase. Additionally, Figure 2 illustrates the future price trend observed exclusively throughout the testing period.
+## Experimental Result
+In this final project, we utilize the FIMTX futures (Mini Taiwan Stock Index Futures) dataset as the foundation for our analysis and training process. Details of the training and testing periods are specified in Table 1. Figure 1 exhibits the outcomes achieved on the testing set, providing a visual representation of the performance during the evaluation phase. Additionally, Figure 2 illustrates the future price trend observed exclusively throughout the testing period.
 
 <img width="644" alt="image" src="https://github.com/jeannineshiu/Multi-Actor-Critic/assets/43820595/3ea6b528-1c95-4e75-967c-25e1d801a315">
 
@@ -46,46 +46,46 @@ python train.py
 Common options:
 
 ```bash
-# 指定訓練/測試區間與初始資金
+# Specify training interval and initial asset
 python train.py --start 2010-01-06 --end 2022-12-30 --asset 1000000
 
-# 調整 epoch 數
+# Set number of epochs
 python train.py --epoch 100
 
-# 關閉 Behavior Cloning
+# Disable Behavior Cloning
 python train.py --is_BClone False
 
-# 使用 GRU 模式（預設 lstm）
+# Use GRU mode (default is lstm)
 python train.py --rnn_mode gru
 ```
 
-訓練過程中會在 `img/` 目錄下輸出資產曲線圖（`result.jpg`、`returns.jpg`）。
+Training outputs asset curve plots (`result.jpg`, `returns.jpg`) to the `img/` directory.
 
-### Dataset
+## Dataset
 
-訓練資料位於 `TX_data/` 目錄：
+Training data is located in the `TX_data/` directory:
 
-| 檔案 | 說明 |
-|------|------|
-| `Normalized_TX_TI.csv` | 正規化後的台指期貨資料（含技術指標），訓練主要用此檔 |
-| `TX_TI.csv` | 未正規化的原始台指期貨資料 |
-| `^GSPC_2000-01-01_2022-12-31.csv` | S&P 500 歷史資料 |
-| `prophetic.csv` | Behavior Cloning 用的先知策略動作序列 |
+| File | Description |
+|------|-------------|
+| `Normalized_TX_TI.csv` | Normalized FIMTX futures data with technical indicators — used for training |
+| `TX_TI.csv` | Raw (un-normalized) FIMTX futures data |
+| `^GSPC_2000-01-01_2022-12-31.csv` | S&P 500 historical data |
+| `prophetic.csv` | Prophetic action sequence used for Behavior Cloning |
 
 
 ## File Usage
 
-| 檔案 | 說明 |
-|------|------|
-| `train.py` | 主訓練腳本，含超參數 argparse 設定 |
-| `component_agent.py` | Agent 類別：Actor/Critic 網路、learn()、take_action() |
-| `model.py` | Actor（GRU-based）與 Critic 網路架構定義 |
-| `env.py` | 股市環境（StockMarket）：step、reward、DSR 計算 |
-| `memory.py` | Replay Buffer 與 EpisodicMemory |
-| `random_process.py` | Ornstein-Uhlenbeck 與 Gaussian 探索雜訊 |
-| `util.py` | 工具函數（to_tensor、soft_update 等） |
-| `baseline.py` | 基線策略（Buy & Hold 等）比較用 |
-| `min_max_reg.py` | 資料 min-max 正規化工具 |
-| `crawl.py` | 使用 yfinance 爬取股價資料 |
-| `postprocess.py` | 從爬取資料計算移動平均等技術指標 |
-| `TX_data/preprocess_prophetic.py` | 產生先知策略動作序列（prophetic.csv） |
+| File | Description |
+|------|-------------|
+| `train.py` | Main training script with argparse hyperparameter configuration |
+| `component_agent.py` | Agent class: Actor/Critic networks, `learn()`, `take_action()` |
+| `model.py` | Actor (GRU-based) and Critic network architecture definitions |
+| `env.py` | Stock market environment: `step()`, reward function, DSR calculation |
+| `memory.py` | Replay Buffer and Episodic Memory |
+| `random_process.py` | Ornstein-Uhlenbeck and Gaussian exploration noise |
+| `util.py` | Utility functions (`to_tensor`, `soft_update`, etc.) |
+| `baseline.py` | Baseline strategies (e.g. Buy & Hold) for performance comparison |
+| `min_max_reg.py` | Min-max normalization utility for data preprocessing |
+| `crawl.py` | Fetches stock price data using yfinance |
+| `postprocess.py` | Computes technical indicators (e.g. moving averages) from raw data |
+| `TX_data/preprocess_prophetic.py` | Generates the prophetic action sequence (`prophetic.csv`) |
