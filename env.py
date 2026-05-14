@@ -1,15 +1,16 @@
 import pandas as pd
 import mplfinance as mpf
 from collections import defaultdict
+import math
+from datetime import datetime
 import os
-import random
 import numpy as np
 
 class StockMarket:
-    '''A class to represent the stock market 
+    '''A class to represent the stock market
 
     Attributes:
-        data_interval(int): the number of entries in one state(default=10, state consists of the data from the last `data_interval` trade days)
+        data_interval(int): the number of entries in one state(default=2, state consists of the data from the last `data_interval` trade days)
         history_data(pd dataframe): the entire stock history data from the crawled csv file
         dataset(pd dataframe): a subset of the dataframe, which is the dataframe in a specific interval
         init_state(pd dataframe): the first state from the dataset
@@ -18,9 +19,9 @@ class StockMarket:
         info(dict): store the value of the information of the environment(debug only)'
         cur_state(pd dataframe): the current state
         first_trade_date(str): date in yyyy-mm-dd format(logging only), the first trade date in the dataset
-        last_trade_date(str): date in yyyy-mm-dd format(logging only), the last trade date in the dataset      
+        last_trade_date(str): date in yyyy-mm-dd format(logging only), the last trade date in the dataset
     '''
-    def __init__(self, csv_path, start, end, data_interval=10):
+    def __init__(self, args):
         ''' initialze the env
 
         The attribute is commented at the beginning of the class
@@ -29,26 +30,43 @@ class StockMarket:
             csv_path(str): the path to the csv file that stores the stock history data(should be in the dataset directory)
             start(str): YYYY-MM-DD format(note that the format must be followd strictly, 2010-06-01 is not the same as 2010-6-1), the first day(note that the first day may not be the same as the first trading day)
             end(str): YYYY-MM-DD format(note that the format must be followd strictly, 2010-06-01 is not the same as 2010-6-1), the last day(note that the last day may not be the same as the last trading day)
-            data_interval(int): data_interval(int): the number of entries in one state(default=10, state consists of the data from the last `data_interval` trade days)
+            data_interval(int): data_interval(int): the number of entries in one state(default=2, state consists of the data from the last `data_interval` trade days)
         '''
 
-        self.data_interval = data_interval
-        self.history_data = pd.read_csv(csv_path, index_col=0)
-        #print(self.history_data)
-        self.dataset, self.init_state = self.__get_dataset(start, end)
+        self.data_interval = args.data_interval
+        self.history_data = pd.read_csv(args.data_path, index_col=0)
+        self.dataset, self.init_state = self.__get_dataset(args.start, args.end)
         self.cur_trade_day = 0
         self.terminated = False
         self.info = defaultdict()
         self.cur_state = None
+        self.step_init_margin=0
+        self.principal=args.asset
 
-        self.first_trade_date = self.dataset.iloc[0]['Date'] # for logging only 
+        self.first_trade_date = self.dataset.iloc[0]['Date'] # for logging only
         self.last_trade_date = self.dataset.iloc[len(self.dataset) - 1]['Date'] # for logging only
         self.__log_init_info()
         self.__plot_candles()
 
+        #Future Cost
+        self.FutureCost=args.FutureCost
+        self.FutureFee=args.FutureFee
+        self.FutureDFee=args.FutureDfee
+        self.FutureTax=args.FutureTax
+        self.DotCost=args.DotCost
+
         # Behavior Cloning
         file = 'TX_data/prophetic.csv'
         self.df=pd.read_csv(file,parse_dates=True,index_col=0)
+        self.is_BClone = args.is_BClone
+
+        ### DSR parameters ### (DSR: Differential Sharp Ratio)
+        self.R_max = args.Reward_max_clip
+        self.At0 = 0
+        self.Bt0 = 0
+        self.eta = 1/100000
+        self.SRt0 = 0
+        #
 
     def __get_dataset(self, start, end):
         ''' get the dataset and return the first state of the environment
@@ -66,10 +84,11 @@ class StockMarket:
         '''
 
         first_date_index = self.history_data[self.history_data['Date'] >= start].index[0]
+        print(first_date_index)
         init_state = self.history_data[first_date_index-self.data_interval+1:first_date_index+1]
         date_mask = (self.history_data['Date'] >= start) & (self.history_data['Date'] <= end)
         return self.history_data[date_mask].reset_index(drop=True), init_state.reset_index(drop=True)
-    
+
     def reset(self):
         ''' Reset the internal state of the environment
 
@@ -79,6 +98,10 @@ class StockMarket:
         self.cur_trade_day = 0
         self.cur_state = self.init_state
         self.terminated = False
+        self.At0 = 0
+        self.Bt0 = 0
+        self.eta = 1/100000
+        self.SRt0 = 0
 
         return self.init_state, self.__set_info()
 
@@ -96,14 +119,15 @@ class StockMarket:
             reward(float): the reward of the action
             self.terminated(bool): whether the state is a terminated state(the last trade day)
             earning(float): the agent's earning
-            info: info 
+            info: info
         '''
 
         assert not self.terminated, 'The environment has terminated(passed the last trade day), please call the reset method and start the next episode'
         assert action >= -1.0 and action <= 1.0, f'action out of range(should be in [-1, 1] but recieved {action})'
-            
+        assert invested_asset > 0
 
         # Behavior Cloning
+        # no attribute self.is_BClone
         if self.is_BClone == True:
             action_bc = self.df['phtAction'][self.cur_trade_day]
             # if action_bc==0 and self.is_PER_replay:
@@ -115,11 +139,11 @@ class StockMarket:
         else:
             action_bc = None
 
-
-
-
         # calcualte reward
         reward, earning = self.__reward_function(action, invested_asset)
+        DSR=self.DSR_reward2()
+        print(DSR)
+        reward=DSR
 
         # state transition
         self.cur_state = self.__state_transition()
@@ -134,25 +158,76 @@ class StockMarket:
 
     def __reward_function(self, action, invested_asset):
         '''calculate the reward based on the given action and the stock price increase rate
-        
+
         Arguments:
             action(float): the agent's action(should be in [-1, 1])
-            invested_asset(float): the agent's investment 
+            invested_asset(float): the agent's investment
 
         Return:
             (i)reward according to the reward function specified in spec
             (ii)the agent's earning
         '''
+        assert invested_asset > 0
+
         cur_day_data = self.dataset.iloc[self.cur_trade_day]
         close_price, open_price = cur_day_data['Close'], cur_day_data['Open']
-        increase_rate = (close_price - open_price) / open_price
+        increase = (close_price - open_price) > 0
 
-        price_ratio = close_price / open_price
-        earning = invested_asset * price_ratio
+        self.step_init_margin=invested_asset
+        B = 0
+        if action > 0:
+            B = 1
+        elif action == 0:
+            B = 0
+        else:
+            B = -1
+        price_change = close_price - open_price
+        Lot = self.money_to_lot(invested_asset)
+        final_price = Lot * price_change
+        earning = final_price * self.DotCost * B
+        TransactionFee = self.FeeCalculation(Lot)
 
+        return np.clip(float(cur_day_data['Price change Ratio'][:-1]) * action, a_min=-0.6, a_max=0.6), earning - TransactionFee
 
-        return increase_rate * 100 * action, earning
+    def DSR_reward2(self):
+        cur_day_data = self.dataset.iloc[self.cur_trade_day]
+        close_price, open_price = cur_day_data['Close'], cur_day_data['Open']
 
+        self.eta = 1/(self.cur_trade_day+1)
+        # self.eta = 1/240
+
+        ### Calculate step return #####
+        profit=close_price-open_price
+        Rt1 = profit*self.DotCost / (self.step_init_margin * self.principal)
+        # Rt1 = self.step_hold_profit*300 / (self.step_init_margin * self.principal)
+
+        ### update At0 & Bt0 ###
+        self.At0 = self.eta*Rt1 + (1-self.eta)*self.At0
+        self.Bt0 = self.eta*Rt1**2 + (1-self.eta)*self.Bt0
+
+        if (self.cur_trade_day+1)==1:
+            SRt1 = 0
+            DSR = 0
+
+        else:
+            K_eta = np.sqrt(1/(1-self.eta))
+            # K_eta = np.sqrt((1-self.eta/2)/(1-self.eta))
+            # print(f'Rt1={Rt1:.6f}, At0={self.At0:.6f}, Bt0={self.Bt0:.8f}, K_eta={K_eta:.3f}')
+            if np.sqrt(self.Bt0 - (self.At0)**2)==0:
+                # print('Sharp Ratio has problem of "Zero Denominator" !!!!!!!!!!!!!!!!!!!!!')
+                # print('Numerator=', self.At0)
+                # print('Denominator=', np.sqrt(self.Bt0 - (self.At0)**2))
+                SRt1 = 0
+            else:
+                SRt1 = self.At0 / K_eta / np.sqrt(self.Bt0 - (self.At0)**2)
+
+            diffSR = SRt1 - self.SRt0
+            DSR = diffSR / self.eta *5  #乘以5是故意的，可以不用
+
+        # DSR = np.clip(DSR, -self.R_max, self.R_max)
+        self.SRt0 = SRt1
+        # print(f'step_init_margin={self.step_init_margin:.6f}, DSR={DSR:.6f}, Rt1={Rt1:.6f}, step_hold_profit={self.step_hold_profit:.2f}, SRt1={SRt1:.4f}')
+        return DSR
 
     def __state_transition(self):
         '''state transition using the sliding window approach
@@ -166,24 +241,20 @@ class StockMarket:
         next_day = self.cur_trade_day + 1
         if next_day >= len(self.dataset):  # there is no next day(cur day is the last day)
             return None
-        if next_day>10:
-            new_state = pd.concat([self.cur_state, pd.DataFrame([self.dataset.iloc[next_day]])], ignore_index=True).tail(-1)
-        else:
-            new_state = pd.concat([self.cur_state, pd.DataFrame([self.dataset.iloc[next_day]])], ignore_index=True)
-        
-        return new_state
+        new_state = pd.concat([self.cur_state, pd.DataFrame([self.dataset.iloc[next_day]])], ignore_index=True).tail(-1)
 
+        return new_state
 
     def __set_info(self):
         ''' update the info attribute
-        
+
         Return:
             return the updated info
         '''
 
         self.info['cur_trade_day'] = self.cur_trade_day
         self.info['cur_date'] = self.dataset.iloc[self.cur_trade_day]['Date']
-        
+
         return self.info
 
     def __log_init_info(self):
@@ -203,12 +274,48 @@ class StockMarket:
 
 
         plt_frame = self.dataset
-        plt_frame.index = pd.DatetimeIndex(plt_frame['Date']) 
+        plt_frame.index = pd.DatetimeIndex(plt_frame['Date'])
         mpf.plot(plt_frame, type='candle', style='yahoo', volume=True, savefig=os.path.join(img_path, filepath), warn_too_much_data=4000)
 
         print(f'Data plotted in {filepath}')
 
-def make(csv_path, start, end):
+    def money_to_lot(self, invested_asset):
+        '''
+        calculate the number of Lot Future
+        input(float): invested money
+        output(float): Lot(s) of future (only purchase the Lot of Future that the Cost is less than invested_asset)
+        '''
+        future_cost = 23000
+        return invested_asset // future_cost
+
+    def FeeCalculation(self,Lot):
+        '''
+        calculate the transaction Fee include the Tax and Fee
+        input: Lots of Future
+        output: Transaction Fee
+        '''
+        Tax=0.00002
+        Fee=12
+        DFee=8
+        TotalCost=0
+        FutureCost=23000*Lot
+        FutureTax=FutureCost*Tax
+        temp=pd.Timestamp(self.history_data['Date'][self.cur_trade_day])
+        FirstDayMonth=datetime(temp.year,temp.month,1)
+        if temp.isocalendar()[1]-FirstDayMonth.isocalendar()[1]+1 == 3 and temp.isocalendar()[2]==2:
+            TotalCost=FutureTax+(Fee+DFee)*Lot
+        else:
+            TotalCost=FutureTax+Fee*Lot*2
+        return math.ceil(TotalCost)
+
+
+    def __len__(self):
+        '''
+        return the len of the dataset
+        '''
+        return self.dataset.shape[0]
+
+def make(args):
     ''' create the stock market environment
 
     initialize the stock market environment by passing the csv_path, start and end to it
@@ -223,7 +330,4 @@ def make(csv_path, start, end):
     Return:
         returns the StockMarket class instance
     '''
-    return StockMarket(csv_path, start, end)
-
-if __name__ == '__main__':
-    make('TX_data/TX_TI.csv', start='2010-01-04', end='2022-12-30')
+    return StockMarket(args)
